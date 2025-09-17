@@ -1,0 +1,40 @@
+FROM nvcr.io/nvidia/pytorch:23.07-py3
+#ARG DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Europe/Minsk
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+ARG USER_ID
+ARG GROUP_ID
+ARG USER
+ENV USER=$USER 
+RUN addgroup --gid $GROUP_ID $USER
+RUN adduser --disabled-password --gecos '' --uid $USER_ID --gid $GROUP_ID $USER
+USER root
+
+COPY . /home/build_env
+WORKDIR /home/build_env
+EXPOSE 8888
+RUN mkdir -p /home/$USER && chown -R $USER:$USER /home/$USER
+
+RUN apt-get update
+RUN apt-get -y install sudo
+RUN sudo apt-get install -y libsm6 libxext6 libxrender-dev
+RUN sudo apt-get install -y software-properties-common
+RUN sudo add-apt-repository universe
+RUN sudo apt-get update
+RUN sudo apt-get -y autoremove python3-blinker
+RUN python -m pip install --upgrade pip
+
+# Additional github installs
+RUN pip install -r requirements.txt
+
+#Returning back to non-root user.
+#USER $USER
+
+# Copy the entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Use the entrypoint script (runs as root, then switches to your user)
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []
