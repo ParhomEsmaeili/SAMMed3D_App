@@ -1,5 +1,5 @@
 from .build_sam3D import *
-from utils import *
+from .utils import *
 from .build_sam import (
     build_sam,
     build_sam_vit_h,

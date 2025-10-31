@@ -56,8 +56,10 @@ import numpy as np
 from monai.data import MetaTensor 
 import os
 import sys 
-basedir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-sys.path.append(basedir)
+# basedir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+# sys.path.append(basedir)
+app_local_path = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+sys.path.append(app_local_path) 
 import copy 
 
 from segment_anything import sam_model_registry
@@ -73,15 +75,10 @@ import gc
 
 class InferApp:
     def __init__(self,
-                dataset_info:dict,
                 infer_device:torch.device
                 ):
-        
-        self.dataset_info = {
-            'dataset_channels':dataset_info['dataset_channel'],
-            'task_channels':dataset_info['task_channel']}
-        if len(self.dataset_info['task_channels']) > 1:
-            raise Exception 
+        warnings.warn('The SAMMed3D inference app does not yet have a reasonable implementation for outputting the probability map, so the \n' \
+        'probability map output will be a dummy tensor of zeros. Please be aware of this when using this app in the validation framework.', UserWarning)
         
         #Hardcoded solution temporary.
         self.infer_device  = infer_device 
@@ -133,7 +130,7 @@ class InferApp:
         # self.sam_model = sam_model_registry[self.app_params['model_type
         if self.app_params['checkpoint_name'] is not None:
             
-            ckpt_path = os.path.join(basedir, 'ckpt', self.app_params['checkpoint_name'])
+            ckpt_path = os.path.join(app_local_path, 'ckpt', self.app_params['checkpoint_name'])
             
             if self.app_params['checkpoint_name'] == 'sam_med3d_turbo_cvpr_coreset.pth':
                 self.model = medim.create_model("SAM-Med3D",
@@ -203,24 +200,15 @@ class InferApp:
         
     def binary_subject_prep(self, request:dict):
         
-        #Here we perform some actions for determining the state of the infer call for adjusting some of our info extraction mechanisms.
-         
-        #Ordering the set of interaction states provided, first check if there is an initialisation: if so, place that first. 
-        im_order = [] 
-        init_modes  = {'Automatic Init', 'Interactive Init'}
-        edit_names_list = list(set(request['im']).difference(init_modes))
-
-        #Sorting this list.
-        edit_names_list.sort(key=lambda test_str : list(map(int, re.findall(r'\d+', test_str))))
-
-        #Extending the ordered list. 
+        self.dataset_info = request['dataset_info']
         
-        im_order.extend(edit_names_list) 
-        #Loading the image and prompts in the input-im domain & the zoom-out domain.
+        if len(self.dataset_info['task_channels']) !=1:
+            raise Exception('SAM-Med3D is only supported for single channel images (single modality, modality sequence or pre-fused channels)')
         
-        if request['model'] == 'IS_interactive_edit':
-            key = edit_names_list[-1]
-            is_state = request['im'][key]
+
+
+        if request['infer_mode'] == 'IS_interactive_edit':
+            is_state = request['i_state']
             if all([i is None for i in is_state['interaction_torch_format']['interactions'].values()]) or all([i is None for i in is_state['interaction_torch_format']['interactions_labels'].values()]):
                 raise Exception('Cannot be an interactive request without interactive inputs.')
             init = False          
@@ -232,9 +220,8 @@ class InferApp:
             # assert isinstance(self.internal_prob_output_mask_storage, torch.Tensor) and self.internal_prob_output_mask_storage
             
 
-        elif request['model'] == 'IS_interactive_init':
-            key = 'Interactive Init' 
-            is_state = request['im'][key]
+        elif request['infer_mode'] == 'IS_interactive_init':
+            is_state = request['i_state']
             if all([i is None for i in is_state['interaction_torch_format']['interactions'].values()]) or all([i is None for i in is_state['interaction_torch_format']['interactions_labels'].values()]):
                 raise Exception('Cannot be an interactive request without interactive inputs.')
             init = True 
@@ -246,9 +233,9 @@ class InferApp:
                 gc.collect() #We collect garbage to free up memory, as the internal storage is no longer needed.
                 torch.cuda.empty_cache() #We clear cache for each new case because image sizes can have variance! 
             except:
-                pass #HACK: Not a good solution but want to clear the cached memory while keeping the script "online".
+                pass #HACK: Not a well engineered solution but want to clear the cached memory while keeping the script "online".
             
-            #The implementation we borrow from does not make any effort to retain their lowres mask in some storage, even 
+            #The implementation we borrow from does not retain their lowres mask in some storage, even 
             #in a file somwhere, so we will not do that either. We always want to be additive, where something is missing, not
             #overwriting the methodology being used.
             
@@ -262,34 +249,34 @@ class InferApp:
 
             torch.cuda.empty_cache()
 
-        elif request['model'] == 'IS_autoseg':
+        elif request['infer_mode'] == 'IS_autoseg':
             #NOTE: We only put this as a placeholder, autoseg should not be applied to this algorithm as it does not 
-            #have the capability.
+            #have the capability, it is way too out of distribution.
 
             raise NotImplementedError('Autoseg is not supported by this inference app, please use interactive init or edit instead.')
 
-            key = 'Automatic Init'
-            is_state = request['im'][key]
-            if is_state is not None:
-                raise Exception('Autoseg should not have any interaction info.')
-            init = True 
+            # key = 'Automatic Init'
+            # is_state = request['im'][key]
+            # if is_state is not None:
+            #     raise Exception('Autoseg should not have any interaction info.')
+            # init = True 
 
-            del self.resampled_im_subj 
-            del self.internal_discrete_output_mask_storage
-            # del self.internal_prob_output_mask_storage
+            # del self.resampled_im_subj 
+            # del self.internal_discrete_output_mask_storage
+            # # del self.internal_prob_output_mask_storage
             
-            gc.collect() #We collect garbage to free up memory, as the internal storage is no longer needed.
-            torch.cuda.empty_cache() #We clear cache for each new case because image sizes can have variance! 
+            # gc.collect() #We collect garbage to free up memory, as the internal storage is no longer needed.
+            # torch.cuda.empty_cache() #We clear cache for each new case because image sizes can have variance! 
 
-            #The implementation we borrow from does not make any effort to retain their lowres mask in some storage, even 
-            #in a file somwhere, so we will not do that either. We always want to be additive, where something is missing, not
-            #overwriting the methodology being used.
+            # #The implementation we borrow from does not make any effort to retain their lowres mask in some storage, even 
+            # #in a file somwhere, so we will not do that either. We always want to be additive, where something is missing, not
+            # #overwriting the methodology being used.
 
-            #Init with empty tensors which will be filled in....
-            self.internal_discrete_output_mask_storage = torch.zeros(request['image']['metatensor'].shape[1:], dtype=torch.uint8)
-            #We will not really be using this as its not used by the algorithm in any capacity, nor by our validation framework just yet.
-            #So we will just leave it empty and return a dummy tensor in the app callback.
-            # self.internal_prob_output_mask_storage = torch.zeros((len(request['config_labels_dict']),) + request['image']['metatensor'].shape[1:], dtype=torch.float32)
+            # #Init with empty tensors which will be filled in....
+            # self.internal_discrete_output_mask_storage = torch.zeros(request['image']['metatensor'].shape[1:], dtype=torch.uint8)
+            # #We will not really be using this as its not used by the algorithm in any capacity, nor by our validation framework just yet.
+            # #So we will just leave it empty and return a dummy tensor in the app callback.
+            # # self.internal_prob_output_mask_storage = torch.zeros((len(request['config_labels_dict']),) + request['image']['metatensor'].shape[1:], dtype=torch.float32)
             
 
 
@@ -345,7 +332,7 @@ class InferApp:
             self.input_dom_im_shape = im_dict['metatensor'].shape[1:]
             
             #Now lets extract the image spacing. 
-            affine = im_dict['metatensor'].meta['affine'] 
+            affine = im_dict['meta_dict']['affine'] 
             if affine is not None:
                 if affine.shape[0] != 4: 
                     raise NotImplementedError('We do not yet provide handling for non 3D-annotation domains')
@@ -363,7 +350,7 @@ class InferApp:
             
                     if self.app_params['checkpoint_name'] == 'sam_med3d_turbo_cvpr_coreset.pth':
                         lower_bound, upper_bound = self.ct_default_bounds
-                        input_dom_img = np.clip(im_dict['metatensor'].array, lower_bound, upper_bound)
+                        input_dom_img = np.clip(im_dict['metatensor'].numpy(), lower_bound, upper_bound)
                         input_dom_img = (
                             (input_dom_img - np.min(input_dom_img))
                             / (np.max(input_dom_img) - np.min(input_dom_img) + 1e-6)
@@ -375,27 +362,27 @@ class InferApp:
                         #We make use of their training script for the normalisation of CT images. They always clamp the image
                         #to -1000 and 1000, so we will do the same.
                         lower_bound, upper_bound = self.ct_default_bounds
-                        input_dom_img = np.clip(im_dict['metatensor'].array, lower_bound, upper_bound) 
+                        input_dom_img = np.clip(im_dict['metatensor'].numpy(), lower_bound, upper_bound)
                 else:
                     try:
                         if self.app_params['checkpoint_name'] == 'sam_med3d_turbo_cvpr_coreset.pth':
                             lower_bound, upper_bound = np.percentile(
-                                im_dict['metatensor'].array[im_dict['metatensor'].array > 0], self.clip_lower_bound
-                            ), np.percentile(im_dict['metatensor'].array[im_dict['metatensor'].array > 0], self.clip_upper_bound)
-                            input_dom_img = np.clip(im_dict['metatensor'].array, lower_bound, upper_bound)
+                                im_dict['metatensor'].numpy()[im_dict['metatensor'].numpy() > 0], self.clip_lower_bound
+                            ), np.percentile(im_dict['metatensor'].numpy()[im_dict['metatensor'].numpy() > 0], self.clip_upper_bound)
+                            input_dom_img = np.clip(im_dict['metatensor'].numpy(), lower_bound, upper_bound)
                             input_dom_img = (
                                 (input_dom_img - np.min(input_dom_img))
                                 / (np.max(input_dom_img) - np.min(input_dom_img) + 1e-6)
                                 * 255.0
                             )
-                            input_dom_img[im_dict['metatensor'].array == 0] = 0
+                            input_dom_img[im_dict['metatensor'].numpy() == 0] = 0
                             #Following the SegFM challenge organisers' approach to normalisation for non-CT images. 
                             #Physical interpretation comes into this. For modalities with relative values (i.e. not a fixed physical
                             # interpretation) voxels of <= 0 are typically irrelevant, so they ignored them? 
                         else:
                             #Following an nnU-Net style implementation we will allow the downstream method to handle the 
                             # normalisation with z-score normalisation on the foreground (>0) voxels, as implemented originally.
-                            input_dom_img = im_dict['metatensor'].array
+                            input_dom_img = im_dict['metatensor'].numpy()
                     except:
                         lower_bound, upper_bound = 0, 0
                         #In the case that there were no voxels with intensity > 0, then we just set the lower and upper bounds
@@ -871,7 +858,7 @@ class InferApp:
         #We create a duplicate so we can transform the data from metatensor format to the torch tensor format compatible with the inference script.
         modif_request = copy.deepcopy(request) 
 
-        app = self.infer_apps[modif_request['model']][f'{class_type}_predict']
+        app = self.infer_apps[modif_request['infer_mode']][f'{class_type}_predict']
 
         #Setting the configs label dictionary for this inference request.
         self.configs_labels_dict = modif_request['config_labels_dict']
@@ -887,7 +874,7 @@ class InferApp:
         #We assert that the output shapes and the affine must match the original metatensor
         assert probs_tensor.shape[1:] == request['image']['metatensor'].shape[1:]
         assert pred.shape[1:] == request['image']['metatensor'].shape[1:] 
-        assert torch.all(affine == request['image']['metatensor'].meta['affine'])
+        assert torch.all(affine == request['image']['meta_dict']['affine'])
         assert isinstance(probs_tensor, torch.Tensor) 
         assert isinstance(pred, torch.Tensor)
         assert isinstance(affine, torch.Tensor)
@@ -913,52 +900,69 @@ class InferApp:
         return output 
 
 
-# if __name__ == '__main__':
-#     infer_app = InferApp(
-#         {'dataset_name':'BraTS2021',
-#         'dataset_modality':'MRI'}, torch.device('cuda'))
+if __name__ == '__main__':
+    infer_app = InferApp(
+    torch.device('cuda')
+    )
 
-#     infer_app.app_configs()
+    infer_app.app_configs()
 
-#     request = {
-#         'image':{
-#             'metatensor': MetaTensor(torch.randn((1,120,120,77)).abs(), affine=torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])),
-#             'meta_dict':{'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}
-#         },
-#         # 'model':'IS_interactive_edit',
-#         'model': 'IS_interactive_init',
-#         'config_labels_dict':{'background':0, 'tumor':1},
-#         'im':
-        
-#         # {'Automatic Init': None}
-#         {'Interactive Init':{
-#             'interaction_torch_format': {'interactions': {'points': [torch.tensor([[40, 103, 43]]), torch.tensor([[62, 62, 39]])], 'scribbles': None, 'bboxes': None}, 'interactions_labels': {'points': [torch.tensor([0]), torch.tensor([1])], 'scribbles': None, 'bboxes': None}},  
-#             'interaction_dict_format': {
-#             'points': {'background': [[40, 103, 43]],
-#             # 'tumor': [[62, 62, 39]]
-#             'tumor':[[30,30,15]]
-#             },
-#             'scribbles': None,
-#             'bboxes': None
-#             },
-#             'prev_probs': {'metatensor': None, 'meta_dict': None}, 
-#             'prev_pred': {'metatensor': None, 'meta_dict': None}}
-#         },
-#         # {'Interactive Edit Iter 1':
-#         # {'interaction_torch_format': {'interactions': {'points': [torch.tensor([[40, 103, 43]]), torch.tensor([[62, 62, 39]])], 'scribbles': None, 'bboxes': None}, 'interactions_labels': {'points': [torch.tensor([0]), torch.tensor([1])], 'scribbles': None, 'bboxes': None}}, 
-#         # 'interaction_dict_format': {
-#         # 'points': {'background': [[40, 103, 43]],
-#         # 'tumor': [[62, 62, 39]]
-#         # },
-#         # 'scribbles': None,
-#         # 'bboxes': None
-#         # },
-#         # 'prev_probs': {'metatensor': torch.randn(2,120,120,77), 'meta_dict': {'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}}, 
-#         # 'prev_pred': {'metatensor': torch.randn(1,120,120,77).to(dtype=torch.int64), 'meta_dict': {'affine':torch.tensor([[2,0,0,0],[0,2,0,0],[0,0,2,0],[0,0,0,1]])}}
-#         # }
+    from monai.transforms import LoadImaged, Orientationd, EnsureChannelFirstd, Compose 
+    import nibabel as nib 
 
-#         # }
-
-#     }
-#     infer_app(request)
-#     print('halt')
+    input_dict = {
+        #'image':'/home/parhomesmaeili/IS-Validation-Framework/IS_Validate/datasets/BraTS2021_Training_Data_Split_True_proportion_0.8_channels_t2_resized_FLIRT_binarised/imagesTs/BraTS2021_00266.nii.gz'
+        'image' :os.path.join(app_local_path, 'debug_image/BraTS2021_00266.nii.gz')
+        }    
+    load_and_transf = Compose([LoadImaged(keys=['image']), EnsureChannelFirstd(keys=['image']), Orientationd(keys=['image'], axcodes='RAS')])
+    loaded_im = load_and_transf(input_dict)
+    original_affine = loaded_im['image'].meta['original_affine']
+    affine = loaded_im['image'].meta['affine'] 
+    original_affine = copy.deepcopy(torch.from_numpy(original_affine).to(dtype=torch.float64)) if type(original_affine) is np.ndarray else copy.deepcopy(original_affine.to(dtype=torch.float64))
+    affine = copy.deepcopy(torch.from_numpy(affine).to(dtype=torch.float64)) if type(affine) is np.ndarray else copy.deepcopy(affine.to(dtype=torch.float64))
+    
+    meta = {
+        'original_affine': original_affine, 
+        'affine': affine
+        }
+    final_loaded_im = torch.from_numpy(loaded_im['image'].clone().detach().numpy())
+    
+    request = {
+        'image':{
+            'metatensor': final_loaded_im,
+            'meta_dict':meta
+        },
+        'infer_mode': 'IS_interactive_init',
+        'config_labels_dict':{'background':0, 'tumor':1},
+        'dataset_info':{
+            'dataset_name':'BraTS2021_t2',
+            'dataset_image_channels': {
+                "T2w": "0"
+            },
+            'task_channels': ["T2w"]
+        },
+        'i_state':
+            {
+            'interaction_torch_format': {
+                'interactions': {
+                    'points': [torch.tensor([[40, 103, 43]]), torch.tensor([[61, 62, 39]])],
+                    'scribbles': None, 
+                    'bboxes': None 
+                    },
+                'interactions_labels': {
+                    'points_labels': [torch.tensor([0]), torch.tensor([1])],
+                    'scribbles_labels': None, 
+                    'bboxes_labels': None
+                    }
+                },
+            'interaction_dict_format': {
+                'points': {'background': [[40, 103, 43]],
+                'tumor': [[61,62,39]]
+                    },
+                'scribbles': None,
+                'bboxes': None
+                },    
+        },
+    }
+    output = infer_app(request)
+    print('halt')
