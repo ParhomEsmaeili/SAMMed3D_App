@@ -230,7 +230,9 @@ class InferApp:
                 del self.resampled_im_subj
                 del self.internal_discrete_output_mask_storage
                 # del self.internal_prob_output_mask_storage
-                gc.collect() #We collect garbage to free up memory, as the internal storage is no longer needed.
+                # gc.collect() #We collect garbage to free up memory, as the internal storage is no longer needed.
+                
+                #Garbage collection does not seem to be doing anything of worth here, so commenting it out as it slows down the process. 
                 torch.cuda.empty_cache() #We clear cache for each new case because image sizes can have variance! 
             except:
                 pass #HACK: Not a well engineered solution but want to clear the cached memory while keeping the script "online".
@@ -414,7 +416,7 @@ class InferApp:
             #We will then delete the input_dom_img as we no longer will need it. 
             del input_dom_img 
             del im_subject  
-            gc.collect() #We collect garbage to free up memory, as the input_dom_img is no longer needed.
+            # gc.collect() #We collect garbage to free up memory, as the input_dom_img is no longer needed.
 
         
 
@@ -528,7 +530,7 @@ class InferApp:
                 cls_prev_seg= self.internal_discrete_output_mask_storage,  #This is the previous segmentation mask which we will use to propagate the click information.
                 )
             del gt_roi 
-            gc.collect() #We collect garbage to free up memory, as the gt_roi is no longer needed. 
+            # gc.collect() #We collect garbage to free up memory, as the gt_roi is no longer needed. 
 
             return True, click_tuple[1][0], roi_image, roi_label, roi_prev_seg, meta_info 
     
@@ -593,9 +595,9 @@ class InferApp:
         meta_info["orig_shape"] = self.input_dom_im_shape
         meta_info["resampled_shape"] = copy.deepcopy(new_subj.spatial_shape),
 
-        del new_subj #Trying to desperately keep memory usage low..
-        gc.collect() #We collect garbage to free up memory, as the new_subj is no longer needed.
-
+        del new_subj
+        # gc.collect() #We collect garbage to free up memory, as the new_subj is no longer needed.
+        #Removed garbage collection as it functionally does not much/anything and just slows down the process.
         return roi_image, roi_label, roi_prev_seg, meta_info
 
 
@@ -676,8 +678,8 @@ class InferApp:
         del subject_roi #We delete the subject and subject_roi to free up memory, as they are no longer needed. The img3D roi, gt3Droi
         #have been deepcopied and so it will take up more memory! 
 
-        gc.collect() #We collect garbage to free up memory, as the subject is no longer needed.
-        
+        # gc.collect() #We collect garbage to free up memory, as the subject is no longer needed.
+        #Removed garbage collection as it functionally does not much/anything and just slows down the process.
         return (
             img3D_roi,
             gt3D_roi,
@@ -795,14 +797,15 @@ class InferApp:
 
         # convert prob to mask
         medsam_seg_prob = torch.sigmoid(prev_mask)  # (1, 1, 64, 64, 64)
-        medsam_seg_prob = medsam_seg_prob.cpu().squeeze()
+        medsam_seg_prob = medsam_seg_prob.squeeze() #.cpu().squeeze()
         medsam_seg_mask = (medsam_seg_prob > self.mask_threshold_sigmoid).to(dtype=torch.uint8)
 
 
         del medsam_seg_prob 
         #taking the input tensor off the device to free up memory, as we will not need it anymore.
         del input_tensor    
-        gc.collect() #We collect garbage to free up memory, as the medsam_seg_prob is no longer needed for now.
+        # gc.collect() #We collect garbage to free up memory, as the medsam_seg_prob is no longer needed for now.
+        #Garbage collection not doing anything other than slowing things down.
         torch.cuda.empty_cache() #We clear cache for the deleted tensors and for the seg mask.
 
 
@@ -832,13 +835,14 @@ class InferApp:
         pred3D_full_ori = F.interpolate(
             pred3D_full[None][None],
             size=meta_info["orig_shape"],
-            mode='nearest').cpu().squeeze()
+            mode='nearest').squeeze() #.cpu().squeeze()
         #Squeezes out of all the singletons only leave the spatial dimension. They used nearest neighbour resizing because the tio
         #resampler will not guarantee that the output will have the same shape. This is a very lossy implementation...
 
         del unpadded_pred 
 
-        gc.collect() #We collect garbage to free up memory, as the pred3D_full is no longer needed.
+        # gc.collect() #We collect garbage to free up memory, as the pred3D_full is no longer needed.
+        #This garbage collection
         torch.cuda.empty_cache() #We clear cache to free up memory, as the pred3D_full is no longer needed.
 
         #NOTE: This pred IS JUST FOR THIS ITERATION AND PATCH. We will need to re-insert it into the original prediction mask (i.e. the prev
@@ -867,7 +871,7 @@ class InferApp:
         
         pred = pred.to(device='cpu')
         probs_tensor = probs_tensor.to(device='cpu')
-        affine = affine.to(device='cpu')
+        # affine = affine.to(device='cpu')
         torch.cuda.empty_cache()
 
 
@@ -896,7 +900,7 @@ class InferApp:
         del probs_tensor
         del affine
         del modif_request
-        gc.collect() 
+        # gc.collect() 
         return output 
 
 
