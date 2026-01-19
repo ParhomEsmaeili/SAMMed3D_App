@@ -76,6 +76,7 @@ import gc
 class InferApp:
     def __init__(self,
                 infer_device:torch.device,
+                adaptation_config_name,
                 algorithm_state, 
                 enable_adaptation,
                 algo_cache_name
