@@ -75,7 +75,10 @@ import gc
 
 class InferApp:
     def __init__(self,
-                infer_device:torch.device
+                infer_device:torch.device,
+                algorithm_state, 
+                enable_adaptation,
+                algo_cache_name
                 ):
         warnings.warn('The SAMMed3D inference app does not yet have a reasonable implementation for outputting the probability map, so the \n' \
         'probability map output will be a dummy tensor of zeros. Please be aware of this when using this app in the validation framework.', UserWarning)
