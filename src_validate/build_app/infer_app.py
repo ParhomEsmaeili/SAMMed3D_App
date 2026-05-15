@@ -908,7 +908,8 @@ class InferApp:
 
 if __name__ == '__main__':
     infer_app = InferApp(
-    torch.device('cuda')
+    torch.device('cuda'),
+    adaptation_config_name=''
     )
 
     infer_app.app_configs()
