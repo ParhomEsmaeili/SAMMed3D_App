@@ -76,6 +76,7 @@ import gc
 class InferApp:
     def __init__(self, 
         infer_device, 
+        dataset_level_schema: dict, 
         adaptation_config_name: str, 
         algorithm_state: dict = {},
         enable_adaptation: bool = False,
@@ -88,7 +89,9 @@ class InferApp:
         
         #Hardcoded solution temporary.
         self.infer_device  = infer_device 
-
+        self.dataset_level_schema = dataset_level_schema
+        self.semantic_id_dict = dataset_level_schema['segmentation_task_schema']['semantic_id_dict']
+        
         self.app_params = {
             'model_type':'vit_b_ori',
             'checkpoint_name': 'sam_med3d_turbo.pth' #'sam_med3d_turbo_cvpr_coreset.pth' 
@@ -202,17 +205,21 @@ class InferApp:
         #If we are not performing inference, then we just return the previous segmentation mask, as there is no foreground prompt to perform inference on.
         
         
-        return self.internal_discrete_output_mask_storage.unsqueeze(0), torch.zeros((len(self.configs_labels_dict),) + self.input_dom_im_shape, dtype=torch.float32), affine 
+        return self.internal_discrete_output_mask_storage.unsqueeze(0), torch.zeros((len(self.semantic_id_dict),) + self.input_dom_im_shape, dtype=torch.float32), affine 
         
     def binary_subject_prep(self, request:dict):
         
-        self.dataset_info = request['dataset_info']
+        if self.dataset_level_schema is None:
+            raise Exception('The dataset level schema must have been set during initialisation!')
+        else:
+            if self.dataset_level_schema['data_schema']['task_channels'] != request['sample_level_schema']['data_schema']['task_channels']:
+                raise Exception('The task channels provided in the sample level schema do not match the ones specified in the dataset level schema! Cannot proceed with inference!')
+        if len(request['sample_level_schema']['data_schema']['task_channels']) != 1:
+            raise Exception('The inference app only supports single channel images for segmentation.')
         
-        if len(self.dataset_info['task_channels']) !=1:
-            raise Exception('SAM-Med3D is only supported for single channel images (single modality, modality sequence or pre-fused channels)')
+        if request['sample_level_schema']['segmentation_task_schema']['semantic_id_dict'] != self.semantic_id_dict:
+            raise Exception('The semantic id dict provided in the sample level schema does not match the one stored in the algorithm state! Cannot proceed with inference!')
         
-
-
         if request['infer_mode'] == 'IS_interactive_edit':
             is_state = request['i_state']
             if all([i is None for i in is_state['interaction_torch_format']['interactions'].values()]) or all([i is None for i in is_state['interaction_torch_format']['interactions_labels'].values()]):
@@ -252,7 +259,7 @@ class InferApp:
             self.internal_discrete_output_mask_storage = torch.zeros(request['image']['metatensor'].shape[1:], dtype=torch.uint8)
             
             #HACK: We will not be using this in the validation framework just yet. And this is not really used in this algorithm's implementation either, so we will just leave it empty...
-            # self.internal_prob_output_mask_storage = torch.zeros((len(request['config_labels_dict']),) + request['image']['metatensor'].shape[1:], dtype=torch.float32)
+            # self.internal_prob_output_mask_storage = torch.zeros((len(request['sample_level_schema']['segmentation_task_schema']['semantic_id_dict']),) + request['image']['metatensor'].shape[1:], dtype=torch.float32)
             #We will just pass through the prob map at the callback return to minimise overhead while we run the simulation. 
 
             torch.cuda.empty_cache()
@@ -284,7 +291,7 @@ class InferApp:
             # self.internal_discrete_output_mask_storage = torch.zeros(request['image']['metatensor'].shape[1:], dtype=torch.uint8)
             # #We will not really be using this as its not used by the algorithm in any capacity, nor by our validation framework just yet.
             # #So we will just leave it empty and return a dummy tensor in the app callback.
-            # # self.internal_prob_output_mask_storage = torch.zeros((len(request['config_labels_dict']),) + request['image']['metatensor'].shape[1:], dtype=torch.float32)
+            # # self.internal_prob_output_mask_storage = torch.zeros((len(request['sample_level_schema']['segmentation_task_schema']['semantic_id_dict']),) + request['image']['metatensor'].shape[1:], dtype=torch.float32)
             
 
 
@@ -353,8 +360,10 @@ class InferApp:
             if self.pre_normalise_bool:
                 #Typically we will pre-clamp/clip on a full image basis as would be expected for both the CVPR SegFM dataset, and the original implementation in the main
                 #branch.
-                    
-                if self.dataset_info['task_channels'][0] == "CT":
+                if len(self.dataset_level_schema['data_schema']['task_channels']) != 1: 
+                    raise Exception('The inference app only supports single channel images for segmentation, but the provided image has multiple channels. Please check the input image channels.')
+                
+                if self.dataset_level_schema['data_schema']['task_channels'][0] == "CT":
             
                     if self.app_params['checkpoint_name'] == 'sam_med3d_turbo_cvpr_coreset.pth':
                         lower_bound, upper_bound = self.ct_default_bounds
@@ -479,7 +488,7 @@ class InferApp:
             click_tuple = None #This will be the click tuple that we will use to perform inference. We initialise it to None,
             #in case there are no foreground clicks, in which case we will not perform inference.
 
-            for class_lb, class_code in self.configs_labels_dict.items(): 
+            for class_lb, class_code in self.semantic_id_dict.items(): 
                 # We write it like this so we don't have to be explicit about the naming convention of the foreground classes.
 
                 if class_lb.title() == 'Background':
@@ -857,21 +866,35 @@ class InferApp:
 
     def __call__(self, request: dict):
         
-        if len(request['config_labels_dict']) == 2:
+        #Let us extract the sample level schema's semantic id dict.
+        sample_level_schema = request.get('sample_level_schema', None)
+        if sample_level_schema == None:
+            raise Exception('The sample level schema must be provided in the inference request! Cannot proceed with inference!')
+        if sample_level_schema.get('segmentation_task_schema') == None:
+            raise Exception('The segmentation task schema must be provided in the sample level schema of the inference request! Cannot proceed with inference!')
+        if sample_level_schema['segmentation_task_schema'].get('semantic_id_dict') == None:
+            raise Exception('The semantic id dict must be provided in the segmentation task schema of the sample level schema of the inference request! Cannot proceed with inference!')
+        sample_level_semantic_id_dict = sample_level_schema['segmentation_task_schema']['semantic_id_dict']
+
+        if len(sample_level_semantic_id_dict) == 2:
             class_type = 'binary'
-        elif len(request['config_labels_dict']) > 2:
+        elif len(sample_level_semantic_id_dict) > 2:
             class_type = 'multi'
-            raise NotImplementedError 
+            raise NotImplementedError('Multi-class segmentation not implemented.')
         else:
-            raise Exception('Should not have received less than two semantic class labels at minimum')
+            raise Exception('Should not have received less than two class labels at minimum')
         
         #We create a duplicate so we can transform the data from metatensor format to the torch tensor format compatible with the inference script.
         modif_request = copy.deepcopy(request) 
 
         app = self.infer_apps[modif_request['infer_mode']][f'{class_type}_predict']
 
-        #Setting the configs label dictionary for this inference request.
-        self.configs_labels_dict = modif_request['config_labels_dict']
+        #Setting the semantic id dictionary for this inference request.
+        if self.semantic_id_dict == None:
+            raise Exception('The semantic id dict should have been set at app initialisation!')
+        else:
+            if self.semantic_id_dict != sample_level_semantic_id_dict:
+                raise Exception('The semantic id dict provided in the request does not match the one stored in the algorithm state! Cannot proceed with inference!')
 
         pred, probs_tensor, affine = app(request=modif_request)
         
@@ -912,9 +935,17 @@ class InferApp:
 
 if __name__ == '__main__':
     infer_app = InferApp(
-    torch.device('cuda')
+        infer_device=torch.device('cuda', index=0),
+        dataset_level_schema={
+            'data_schema': {
+            'task_channels': ["T2w"]
+            },
+            'segmentation_task_schema': {
+                'semantic_id_dict': {'background':0, 'tumor':1}
+            }
+        },
+        adaptation_config_name=None
     )
-
     infer_app.app_configs()
 
     from monai.transforms import LoadImaged, Orientationd, EnsureChannelFirstd, Compose 
@@ -943,13 +974,13 @@ if __name__ == '__main__':
             'meta_dict':meta
         },
         'infer_mode': 'IS_interactive_init',
-        'config_labels_dict':{'background':0, 'tumor':1},
-        'dataset_info':{
-            'dataset_name':'BraTS2021_t2',
-            'dataset_image_channels': {
-                "T2w": "0"
+        'sample_level_schema': {
+            'data_schema': {
+                'task_channels': ["T2w"]
             },
-            'task_channels': ["T2w"]
+            'segmentation_task_schema': {
+                'semantic_id_dict': {'background':0, 'tumor':1},
+            }
         },
         'i_state':
             {
