@@ -51,6 +51,8 @@
 
 
 
+import random
+
 import torch 
 import numpy as np
 from monai.data import MetaTensor 
@@ -907,6 +909,10 @@ class InferApp:
 
 
 if __name__ == '__main__':
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    random.seed(0)
+    np.random.seed(0)
     infer_app = InferApp(
     torch.device('cuda'),
     adaptation_config_name=''
