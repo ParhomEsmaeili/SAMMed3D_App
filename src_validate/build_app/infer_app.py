@@ -474,6 +474,7 @@ class InferApp:
             # segmentation mask, as we cannot perform further inference without any foreground clicks. 
 
             clicks_by_class = is_state['interaction_torch_format']['interactions']['points']
+            clicks_by_class = [torch.floor(c) for c in clicks_by_class]
             click_lbs_by_class = is_state['interaction_torch_format']['interactions_labels']['points_labels']
 
             click_tuple = None #This will be the click tuple that we will use to perform inference. We initialise it to None,
