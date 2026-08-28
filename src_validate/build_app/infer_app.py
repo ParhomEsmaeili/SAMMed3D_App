@@ -214,11 +214,23 @@ class InferApp:
         if self.dataset_level_schema is None:
             raise Exception('The dataset level schema must have been set during initialisation!')
         else:
-            if self.dataset_level_schema['data_schema']['task_channels'] != request['sample_level_schema']['data_schema']['task_channels']:
-                raise Exception('The task channels provided in the sample level schema do not match the ones specified in the dataset level schema! Cannot proceed with inference!')
+            # Sample-level task_channels must be a subset of the dataset-level vocabulary, not
+            # identical to it — a case can legitimately have fewer channels present than the
+            # dataset-wide convention (IS_Validate's generate_sample_level_schema now derives a
+            # genuine per-sample channel list rather than echoing the dataset-level value). set(...)
+            # works whether task_channels is a list of names or a dict keyed by name — both give
+            # the same set of channel names either way.
+            if not set(request['sample_level_schema']['data_schema']['task_channels']) <= set(self.dataset_level_schema['data_schema']['task_channels']):
+                raise Exception('The task channels provided in the sample level schema are not a subset of those specified in the dataset level schema! Cannot proceed with inference!')
         if len(request['sample_level_schema']['data_schema']['task_channels']) != 1:
             raise Exception('The inference app only supports single channel images for segmentation.')
-        
+
+        # Cached for use deeper in the call chain (binary_prop_to_model), which only has
+        # access to self, not this request — must be this sample's task_channels, not
+        # self.dataset_level_schema's full task vocabulary: a per-sample decision (e.g. "is
+        # this sample's channel CT") has to be made from what this sample actually has.
+        self.current_sample_task_channels = request['sample_level_schema']['data_schema']['task_channels']
+
         if request['sample_level_schema']['segmentation_task_schema']['semantic_id_dict'] != self.semantic_id_dict:
             raise Exception('The semantic id dict provided in the sample level schema does not match the one stored in the algorithm state! Cannot proceed with inference!')
         
@@ -362,10 +374,10 @@ class InferApp:
             if self.pre_normalise_bool:
                 #Typically we will pre-clamp/clip on a full image basis as would be expected for both the CVPR SegFM dataset, and the original implementation in the main
                 #branch.
-                if len(self.dataset_level_schema['data_schema']['task_channels']) != 1: 
+                if len(self.current_sample_task_channels) != 1:
                     raise Exception('The inference app only supports single channel images for segmentation, but the provided image has multiple channels. Please check the input image channels.')
-                
-                if self.dataset_level_schema['data_schema']['task_channels'][0] == "CT":
+
+                if 'CT' in self.current_sample_task_channels:
             
                     if self.app_params['checkpoint_name'] == 'sam_med3d_turbo_cvpr_coreset.pth':
                         lower_bound, upper_bound = self.ct_default_bounds
